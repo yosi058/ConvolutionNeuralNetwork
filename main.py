@@ -9,7 +9,7 @@ from scipy import signal
 
 LR = 0.001
 
-np.random.seed(30)
+np.random.seed(34)
 
 
 # 3x32x32 , 16x3x3x3
@@ -27,6 +27,7 @@ class Layer:
             # self.weights = sqrt(2/size_matrix_curr_layer*9*num_features_current_layer)*np.random.randn(num_weights_next_layer,num_features_current_layer,3,3)
             self.weights = np.random.uniform(low=-0.01, high=0.01,
                                              size=(num_weights_next_layer, num_features_current_layer, 3, 3))
+            self.delta_weights = np.zeros(self.weights.shape)
 
     def convelotion(self, next_layer):
         next_layer.features = np.zeros((next_layer.num_features, next_layer.size_matrix, next_layer.size_matrix))
@@ -102,7 +103,7 @@ class Layer:
 
     def update_weights(self, next_layer_error):
         activate_feature = np.maximum(self.features, 0)
-        activate_feature = np.minimum(self.features, 1)
+        activate_feature = np.minimum(activate_feature, 1)
         # activate function Relu
         for one_weight_layer in range(
                 next_layer_error.num_features):  # one dimenssion from 4 of the weight matrix layer
@@ -119,13 +120,16 @@ class Layer:
             multiple_errors_by_previous_layer = activate_feature[None, :, :, :] * last_layer_error_according_weights[:,
                                                                                   None, :, :]
             sum_errors_of_each_feature_map = multiple_errors_by_previous_layer.sum(axis=(2, 3))
-            delta_weights = sum_errors_of_each_feature_map.transpose(1, 0).reshape((activate_feature.shape[0], 3, 3))
-            self.weights[one_weight_layer] = self.weights[one_weight_layer] + (LR * delta_weights)
+            error_weights = sum_errors_of_each_feature_map.transpose(1, 0).reshape((activate_feature.shape[0], 3, 3))
+            self.delta_weights[one_weight_layer]+=error_weights
+
+            #self.weights[one_weight_layer] = self.weights[one_weight_layer] + (LR * delta_weights)
 
 
 # Do run noise
 NOISE = False
 LOAD = True
+UPDATE = False
 
 
 class NeuralNetwork(object):
@@ -134,12 +138,14 @@ class NeuralNetwork(object):
         # parameters
         self.inputSize = 2048
         self.outputSize = 10
-        self.hiddenSize_one = 600
+        self.hiddenSize_one = 300
         # Do load the weights from files
         # Adding one to the bias
         self.W1 = np.random.uniform(low=-0.01, high=0.01,
                                     size=(self.inputSize + 1, self.hiddenSize_one + 1))  # 1025x301
         self.W2 = np.random.uniform(low=-0.01, high=0.01, size=(self.hiddenSize_one + 1, self.outputSize))  # 301x10
+        self.dalta_W1 = np.zeros(self.W1.shape)
+        self.dalta_W2 = np.zeros(self.W2.shape)
 
     # Receiving a vector and returning the output
     def feedForward(self, first_vector):
@@ -213,13 +219,19 @@ class NeuralNetwork(object):
         hidden_input_deriv = self.activationFunction(first_vector[0], deriv=True)
         self.input_mult_error = np.dot(self.hidden_error, self.W1.T)  # 1x301 X 301x1025 -> 1x1025
         self.input_error = hidden_input_deriv * self.input_mult_error  # layer one - input
+
         # update w
-        self.W2 += LR * self.hidden_layer_activate.T.dot(self.output_error)
+        self.dalta_W2 += self.hidden_layer_activate.T.dot(self.output_error)
         temp = self.activationFunction(first_vector[0])
         # Converting a vector to a 1 * 1 matrix
         temp = np.asmatrix(temp, dtype=float)
         temp = np.array(temp, dtype=float)
-        self.W1 += LR * temp.T.dot(self.hidden_error)
+        self.dalta_W1 += temp.T.dot(self.hidden_error)
+        if UPDATE:
+            self.W2 += LR * self.dalta_W2
+            self.W1 += LR * self.dalta_W1
+            self.dalta_W2 = np.zeros(self.W2.shape)
+            self.dalta_W1 = np.zeros(self.W1.shape)
 
     # The function randomly resets 10% of the input
     def noise(self, cur_row):
@@ -259,6 +271,9 @@ class Model:
         self.layer_three_max_pool = Layer(64, 4, -1, False, False)
         self.NN = NeuralNetwork()
         self.counter = 0
+        # self.save_error_layer_three = Layer(64, 8, -1, False, False)
+        # self.save_error_layer_two = Layer(32, 16, -1, False, False)
+        # self.save_error_layer_one = Layer(16, 32, -1, False, False)
 
     def create_layer_input(self, line):
         new_feature_map = np.array(
@@ -282,7 +297,6 @@ class Model:
 
     def backFoward(self, correct_output, output_forward):
         flat = self.flat
-        # flat = self.flat
         flat = np.asmatrix(flat, dtype=float)
         flat = np.array(flat, dtype=float)
         self.NN.backward(flat, correct_output, output_forward)  # back in full connected
@@ -301,10 +315,20 @@ class Model:
         one_layer_error = Layer(16, 32, -1, False, False)
         one_layer_max_pool_error.reverse_max_pool(one_layer_error, self.layer_one)
 
+        # self.save_error_layer_one.features += one_layer_error.features
+        # self.save_error_layer_two.features += tow_layer_error.features
+
         ######################## update w
-        # self.layer_tow_max_pool.update_weights(three_layer_error)  # update first - layer weight
+            # self.layer_tow_max_pool.update_weights(three_layer_error)  # update first - layer weight
+
         self.layer_one_max_pool.update_weights(tow_layer_error)
         self.layer_input.update_weights(one_layer_error)
+        if UPDATE:
+            self.layer_one_max_pool.weights+=self.layer_one_max_pool.delta_weights*LR
+            self.layer_input.weights+=self.layer_input.delta_weights*LR
+            self.layer_one_max_pool.delta_weights=np.zeros(self.layer_one_max_pool.delta_weights.shape)
+            self.layer_input.delta_weights =np.zeros(self.layer_input.delta_weights.shape)
+
 
     def train(self, cur_row, correct_output):
         self.feedForfoward(cur_row)
@@ -339,13 +363,17 @@ my_model = Model()
 train_data = train_data.rename(columns=lambda c: c - 1).to_numpy()
 validate_data = validate_data.rename(columns=lambda c: c - 1).to_numpy()
 for k in range(100):
-    if k == 14:
-        LR = 0.8 * LR
     print("the number of epoch is" + str(k))
+    if k == 24:
+        LR = 0.0004
     counter_train = 0
     my_model.counter = 0
     for i in range(8000):
-        if i % 100 == 0:
+        if i % 20 == 0 and i > 0:
+            UPDATE = True
+        else:
+            UPDATE = False
+        if i % 1000 == 0:
             print("pass " + str(i) + " lines")
         current_output = np.zeros(10)
         # The right result
